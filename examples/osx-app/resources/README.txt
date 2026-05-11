@@ -1,0 +1,1 @@
+This AppKit sample is built from Objective-C++ and copied into Hello.app as an example bundle resource.
