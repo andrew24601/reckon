@@ -1,4 +1,4 @@
-import { clangTree, executable, macOSApp, pngIcon, reckon } from "../../src";
+import { clangTree, executable, macOSApp, pngIcon, reckon } from "../../src/index.js";
 
 async function main(): Promise<void> {
   const objects = clangTree("examples/osx-app/src", {

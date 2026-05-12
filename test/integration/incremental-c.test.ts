@@ -8,8 +8,8 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { deflateSync } from "node:zlib";
 
-import { clang, clangTree, executable, macOSApp, pngIcon, reckon, writeFile as reckonWriteFile } from "../../src";
-import type { BuildTarget, Task } from "../../src";
+import { clang, clangTree, executable, macOSApp, pngIcon, reckon, writeFile as reckonWriteFile } from "../../src/index.js";
+import type { BuildTarget, Task } from "../../src/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -145,6 +145,41 @@ async function writeIconSource(cwd: string, red: number, green: number, blue: nu
   const assetsDir = path.join(cwd, "assets");
   await mkdir(assetsDir, { recursive: true });
   await writeSolidPng(path.join(assetsDir, "AppIcon.png"), red, green, blue);
+}
+
+async function canGenerateIcnsFromPng(): Promise<boolean> {
+  const cwd = await mkdtemp(path.join(tmpdir(), "reckon-icon-probe-"));
+
+  try {
+    const source = path.join(cwd, "AppIcon.png");
+    const iconset = path.join(cwd, "AppIcon.iconset");
+    await writeSolidPng(source, 40, 120, 220);
+    await mkdir(iconset, { recursive: true });
+
+    const variants = [
+      ["icon_16x16.png", 16],
+      ["icon_16x16@2x.png", 32],
+      ["icon_32x32.png", 32],
+      ["icon_32x32@2x.png", 64],
+      ["icon_128x128.png", 128],
+      ["icon_128x128@2x.png", 256],
+      ["icon_256x256.png", 256],
+      ["icon_256x256@2x.png", 512],
+      ["icon_512x512.png", 512],
+      ["icon_512x512@2x.png", 1024],
+    ] as const;
+
+    for (const [fileName, size] of variants) {
+      await execFileAsync("sips", ["-z", String(size), String(size), source, "--out", path.join(iconset, fileName)]);
+    }
+
+    await execFileAsync("iconutil", ["--convert", "icns", "--output", path.join(cwd, "AppIcon.icns"), iconset]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 }
 
 function createCTargets() {
@@ -466,7 +501,12 @@ test("appBundle builds and incrementally refreshes a macOS app bundle", async ()
   });
 });
 
-test("pngIcon generates an app icon and triggers bundle rebuilds when the PNG changes", async () => {
+test("pngIcon generates an app icon and triggers bundle rebuilds when the PNG changes", async (t) => {
+  if (!(await canGenerateIcnsFromPng())) {
+    t.skip("host sips/iconutil toolchain cannot generate an .icns from a PNG");
+    return;
+  }
+
   await withTempDir(async (cwd) => {
     await writeExampleFiles(cwd);
     await writeIconSource(cwd, 255, 94, 58);

@@ -1,4 +1,4 @@
-import { clangTree, executable, reckon } from "../../src";
+import { clangTree, executable, reckon } from "../../src/index.js";
 
 async function main(): Promise<void> {
   const objects = clangTree("examples/c-hello/src");

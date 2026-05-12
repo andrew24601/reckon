@@ -5,9 +5,9 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-import { BuildFailureError, command as createCommandTask, copy, reckon, writeFile as createWriteFileTask } from "../../src";
-import { createFingerprint } from "../../src/core/signatures";
-import type { Task } from "../../src/core/types";
+import { BuildFailureError, command as createCommandTask, copy, reckon, writeFile as createWriteFileTask } from "../../src/index.js";
+import { createFingerprint } from "../../src/core/signatures.js";
+import type { Task } from "../../src/core/types.js";
 
 async function withTempDir(run: (cwd: string) => Promise<void>): Promise<void> {
   const cwd = await mkdtemp(path.join(tmpdir(), "reckon-"));

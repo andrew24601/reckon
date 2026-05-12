@@ -1,8 +1,33 @@
 # Reckon
 
-Reckon is a library-first incremental build system for Node.js. You define a build as a graph of tasks in JavaScript or TypeScript, then run that graph with `reckon(...)`. Reckon persists task state under `.reckon/state.json`, skips work when inputs and outputs are unchanged, and executes independent tasks in parallel.
+Reckon is a library-first incremental build system for Node.js. Users define a build as a graph of tasks in JavaScript or TypeScript, then execute that graph with `reckon(...)`. Reckon persists task state under `.reckon/state.json`, skips work when inputs and outputs are unchanged, and executes independent tasks in parallel.
 
-The current implementation is intentionally small and focused. It provides a core scheduler plus a few built-in task helpers for filesystem work, C-family compilation, executable linking, and unsigned macOS app bundling.
+## Package Shape
+
+- npm package name: `reckon`
+- ESM-only package: `"type": "module"` with `exports["."].import` pointing at `dist/index.js`
+- Type declarations are emitted to `dist/index.d.ts`
+- Source files are TypeScript under `src/`
+- Published files are restricted by `package.json#files`
+- There is no standalone CLI; consumers run their own build file with Node or a TypeScript runner
+
+For docs and examples, prefer `build.mjs` as the default consumer build-file name:
+
+```js
+import { clangTree, executable, reckon } from "reckon";
+
+const objects = clangTree("src");
+const app = executable("build/hello", objects);
+
+await reckon(app, {
+  verbose: true,
+  clang: {
+    includes: ["src"],
+  },
+});
+```
+
+`Reckonfile.*` is acceptable inside this repository's examples, but do not imply that Reckon has a special config-file convention. For TypeScript consumer examples, prefer `build.ts` plus `tsx`.
 
 ## Implemented Scope
 
@@ -22,28 +47,6 @@ Not implemented in the current codebase:
 - SVG icon conversion
 - watch mode or a dedicated command-line interface
 
-## Example
-
-```ts
-import { clangTree, executable, reckon } from "reckon";
-
-async function build(): Promise<void> {
-    const objects = clangTree("src");
-    const app = executable("build/hello", objects);
-
-    await reckon(app, {
-        verbose: true,
-        clang: {
-            includes: ["src"],
-        },
-    });
-}
-
-void build();
-```
-
-This reflects the implemented API: compile sources with `clang(...)` or `clangTree(...)`, link them with `executable(...)`, and execute the graph with `reckon(...)`.
-
 ## Behavior
 
 Reckon records each task's fingerprint, declared inputs, declared outputs, and any discovered dependencies. On later runs, it rebuilds only when a task definition changes, an output is missing or changed, a declared file dependency changes, or a discovered dependency changes.
@@ -62,3 +65,14 @@ The implemented macOS support is limited to building unsigned application bundle
 - icons must already be `.icns`, or can be produced by `pngIcon(...)`
 
 `pngIcon(...)` currently accepts PNG input only and relies on the macOS `sips` and `iconutil` tools to generate the final `.icns` file.
+
+## Verification
+
+Use these before publishing:
+
+```bash
+npm run release:check
+npm publish --provenance
+```
+
+`release:check` runs type-checking, tests, build output generation, and an npm dry-run pack.

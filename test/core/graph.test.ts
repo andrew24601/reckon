@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildGraph } from "../../src/core/graph";
-import { createFingerprint } from "../../src/core/signatures";
-import type { Task } from "../../src/core/types";
+import { buildGraph } from "../../src/core/graph.js";
+import { createFingerprint } from "../../src/core/signatures.js";
+import type { Task } from "../../src/core/types.js";
 
 function createTask(options: {
   id: string;
