@@ -5,7 +5,7 @@ import { createFingerprint, normalizeBuildPath } from "../core/signatures.js";
 import type { Task } from "../core/types.js";
 
 export interface MacOSAppResource {
-  readonly source: string;
+  readonly source: string | Task;
   readonly destination?: string;
 }
 
@@ -34,6 +34,7 @@ interface IconVariant {
 interface NormalizedMacOSAppResource {
   readonly source: string;
   readonly destination: string;
+  readonly taskDependency?: Task;
 }
 
 interface ResolvedMacOSAppIcon {
@@ -94,12 +95,31 @@ function normalizeResourceDestination(destination: string): string {
   return normalizedDestination;
 }
 
-function normalizeResource(resource: MacOSAppResource): NormalizedMacOSAppResource {
-  const source = normalizeBuildPath(resource.source);
+function resolveMacOSAppResourceSource(source: string | Task): Pick<NormalizedMacOSAppResource, "source" | "taskDependency"> {
+  if (typeof source === "string") {
+    return {
+      source: normalizeBuildPath(source),
+    };
+  }
+
+  const output = source.outputs[0];
+
+  if (!output) {
+    throw new Error(`Task ${source.label} does not declare a resource output to bundle`);
+  }
 
   return {
-    source,
-    destination: normalizeResourceDestination(resource.destination ?? path.basename(source)),
+    source: normalizeBuildPath(output),
+    taskDependency: source,
+  };
+}
+
+function normalizeResource(resource: MacOSAppResource): NormalizedMacOSAppResource {
+  const resolvedResource = resolveMacOSAppResourceSource(resource.source);
+
+  return {
+    ...resolvedResource,
+    destination: normalizeResourceDestination(resource.destination ?? path.basename(resolvedResource.source)),
   };
 }
 
@@ -242,8 +262,14 @@ function createMacOSAppTask(bundlePath: string, executable: Task, options: MacOS
     id: `macOSApp:${normalizedBundlePath}`,
     label: `macOS app ${normalizedBundlePath}`,
     outputs: [normalizedBundlePath, contentsPath, macOSPath, resourcesPath, infoPlistPath, bundledExecutablePath, ...resourceOutputs],
-    fileDependencies: normalizedResources.map((resource) => resource.source),
-    taskDependencies: [executable, ...(resolvedIcon?.taskDependency ? [resolvedIcon.taskDependency] : [])],
+    fileDependencies: normalizedResources
+      .filter((resource) => resource.taskDependency === undefined)
+      .map((resource) => resource.source),
+    taskDependencies: [
+      executable,
+      ...(resolvedIcon?.taskDependency ? [resolvedIcon.taskDependency] : []),
+      ...normalizedResources.flatMap((resource) => resource.taskDependency ? [resource.taskDependency] : []),
+    ],
     fingerprint: createFingerprint({
       kind: "macOSApp",
       bundlePath: normalizedBundlePath,

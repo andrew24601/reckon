@@ -8,9 +8,22 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { deflateSync } from "node:zlib";
 
-import { clang, clangTree, executable, macOSApp, pngIcon, reckon } from "../../src";
+import { clang, clangTree, executable, macOSApp, pngIcon, reckon, writeFile as reckonWriteFile } from "../../src";
+import type { BuildTarget, Task } from "../../src";
 
 const execFileAsync = promisify(execFile);
+
+function isTask(target: BuildTarget): target is Task {
+  return !Array.isArray(target);
+}
+
+function expectTask(target: BuildTarget): Task {
+  if (isTask(target)) {
+    return target;
+  }
+
+  throw new Error("Expected a single task");
+}
 
 async function withTempDir(run: (cwd: string) => Promise<void>): Promise<void> {
   const cwd = await mkdtemp(path.join(tmpdir(), "reckon-c-"));
@@ -183,6 +196,21 @@ function createIconBundleTargets() {
   };
 }
 
+function createGeneratedResourceBundleTargets(webContents: string) {
+  const targets = createCTargets();
+  const webBundleTask = reckonWriteFile("web/dist/app.bundle.js", webContents);
+  const bundleTask = macOSApp("build/Hello.app", targets.executable, {
+    bundleIdentifier: "dev.reckon.tests.hello",
+    resources: [{ source: webBundleTask, destination: "web/dist/app.bundle.js" }],
+  });
+
+  return {
+    ...targets,
+    webBundle: webBundleTask,
+    bundle: bundleTask,
+  };
+}
+
 test("C tasks rebuild only the affected object files", async () => {
   await withTempDir(async (cwd) => {
     await writeExampleFiles(cwd);
@@ -317,6 +345,28 @@ test("clangTree compiles nested source trees without object collisions", async (
   });
 });
 
+test("clangTree discovers sources relative to reckon cwd instead of process cwd", { concurrency: false }, async () => {
+  await withTempDir(async (cwd) => {
+    await writeExampleFiles(cwd);
+
+    const invocationDir = path.join(cwd, "invoker");
+    await mkdir(invocationDir, { recursive: true });
+
+    const originalCwd = process.cwd();
+    process.chdir(invocationDir);
+
+    try {
+      const targets = executable("build/hello", clangTree("src"));
+      const summary = await reckon(targets, { cwd, concurrency: 2 });
+
+      assert.equal(summary.executed.length, 3);
+      assert.equal((await execFileAsync(path.join(cwd, "build/hello"))).stdout, "answer=42\n");
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+});
+
 test("clangTree discovers C++ sources and executable infers clang++", async () => {
   await withTempDir(async (cwd) => {
     await writeCppTreeFiles(cwd);
@@ -338,7 +388,7 @@ test("executable expands framework defaults and options into linker arguments", 
     frameworks: ["Cocoa"],
     libraries: ["z"],
   });
-  const resolved = target.resolve?.({
+  const resolved = expectTask(target.resolve?.({
     options: {
       executable: {
         frameworks: ["Foundation"],
@@ -347,15 +397,18 @@ test("executable expands framework defaults and options into linker arguments", 
     resolveTask(task) {
       return task;
     },
-  }) ?? target;
+    resolveTarget() {
+      return [objectTask];
+    },
+  }) ?? target);
   const commands: Array<{ command: string; args: readonly string[] }> = [];
 
   await resolved.execute({
     cwd: "/tmp/reckon-frameworks-test",
-    resolvePath(filePath) {
+    resolvePath(filePath: string) {
       return path.posix.join("/tmp/reckon-frameworks-test", filePath);
     },
-    async runCommand(commandName, args) {
+    async runCommand(commandName: string, args: readonly string[]) {
       commands.push({ command: commandName, args });
     },
   });
@@ -439,5 +492,28 @@ test("pngIcon generates an app icon and triggers bundle rebuilds when the PNG ch
     const third = await reckon(thirdTargets.bundle, { cwd, concurrency: 2 });
     assert.deepEqual(new Set(third.executed), new Set([thirdTargets.icon.label, thirdTargets.bundle.label]));
     assert.deepEqual(new Set(third.skipped), new Set([thirdTargets.mainObject.label, thirdTargets.utilObject.label, thirdTargets.executable.label]));
+  });
+});
+
+test("appBundle resources can come from task outputs", async () => {
+  await withTempDir(async (cwd) => {
+    await writeExampleFiles(cwd);
+
+    const firstTargets = createGeneratedResourceBundleTargets("console.log('first');\n");
+    const first = await reckon(firstTargets.bundle, { cwd, concurrency: 2 });
+    assert.equal(first.executed.length, 5);
+
+    const bundledWebShellPath = path.join(cwd, "build/Hello.app/Contents/Resources/web/dist/app.bundle.js");
+    assert.equal(await readFile(bundledWebShellPath, "utf8"), "console.log('first');\n");
+
+    const secondTargets = createGeneratedResourceBundleTargets("console.log('first');\n");
+    const second = await reckon(secondTargets.bundle, { cwd, concurrency: 2 });
+    assert.equal(second.skipped.length, 5);
+
+    const thirdTargets = createGeneratedResourceBundleTargets("console.log('second');\n");
+    const third = await reckon(thirdTargets.bundle, { cwd, concurrency: 2 });
+    assert.deepEqual(new Set(third.executed), new Set([thirdTargets.webBundle.label, thirdTargets.bundle.label]));
+    assert.deepEqual(new Set(third.skipped), new Set([thirdTargets.mainObject.label, thirdTargets.utilObject.label, thirdTargets.executable.label]));
+    assert.equal(await readFile(bundledWebShellPath, "utf8"), "console.log('second');\n");
   });
 });

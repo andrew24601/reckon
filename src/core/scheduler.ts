@@ -5,7 +5,7 @@ import path from "node:path";
 import { buildGraph, type BuildNode } from "./graph.js";
 import { capturePathSignatures, resolveBuildPath, signatureMapsEqual } from "./signatures.js";
 import { getTaskState, loadBuildState, saveBuildState, setTaskState } from "./state.js";
-import { BuildFailureError, CommandExecutionError, type BuildFailureDetail, type BuildOptions, type BuildState, type BuildSummary, type PersistedTaskState, type Task, type TaskContext, type TaskExecutionResult } from "./types.js";
+import { BuildFailureError, CommandExecutionError, type BuildFailureDetail, type BuildOptions, type BuildState, type BuildSummary, type BuildTarget, type PersistedTaskState, type Task, type TaskContext, type TaskExecutionResult } from "./types.js";
 
 interface TaskRunResult {
   readonly status: "executed" | "skipped" | "failed";
@@ -18,10 +18,25 @@ interface BuildLogger {
   error(message: string): void;
 }
 
-function withResolvedDependencies(task: Task, resolveTask: (task: Task) => Task): Task {
-  const dependencies = task.taskDependencies.map(resolveTask);
+function isTask(target: BuildTarget): target is Task {
+  return !Array.isArray(target);
+}
 
-  if (dependencies.every((dependency, index) => dependency === task.taskDependencies[index])) {
+function flattenTargets(target: BuildTarget): readonly Task[] {
+  if (isTask(target)) {
+    return [target];
+  }
+
+  return target.flatMap(flattenTargets);
+}
+
+function withResolvedDependencies(task: Task, resolveTarget: (target: BuildTarget) => readonly Task[]): Task {
+  const dependencies = task.taskDependencies.flatMap((dependency) => resolveTarget(dependency));
+
+  if (
+    dependencies.length === task.taskDependencies.length
+    && dependencies.every((dependency, index) => dependency === task.taskDependencies[index])
+  ) {
     return task;
   }
 
@@ -31,11 +46,23 @@ function withResolvedDependencies(task: Task, resolveTask: (task: Task) => Task)
   };
 }
 
-function resolveConfiguredTargets(targets: readonly Task[], options: BuildOptions): readonly Task[] {
-  const cache = new WeakMap<Task, Task>();
+function resolveConfiguredTargets(targets: BuildTarget, options: BuildOptions): readonly Task[] {
+  const cache = new WeakMap<Task, readonly Task[]>();
   const resolving = new WeakSet<Task>();
 
+  const resolveTarget = (target: BuildTarget): readonly Task[] => flattenTargets(target).flatMap(resolveTaskTarget);
+
   const resolveTask = (task: Task): Task => {
+    const resolvedTargets = resolveTarget(task);
+
+    if (resolvedTargets.length !== 1) {
+      throw new Error(`Task ${task.label} resolved to ${resolvedTargets.length} tasks where exactly one task was required`);
+    }
+
+    return resolvedTargets[0];
+  };
+
+  const resolveTaskTarget = (task: Task): readonly Task[] => {
     const cached = cache.get(task);
     if (cached) {
       return cached;
@@ -48,16 +75,22 @@ function resolveConfiguredTargets(targets: readonly Task[], options: BuildOption
     resolving.add(task);
 
     try {
-      const resolvedTask = task.resolve ? task.resolve({ options, resolveTask }) : task;
-      const finalizedTask = withResolvedDependencies(resolvedTask, resolveTask);
-      cache.set(task, finalizedTask);
-      return finalizedTask;
+      const resolvedTarget = task.resolve ? task.resolve({ options, resolveTask, resolveTarget }) : task;
+      const finalizedTasks = flattenTargets(resolvedTarget).flatMap((resolvedTask) => {
+        if (resolvedTask === task) {
+          return [withResolvedDependencies(task, resolveTarget)];
+        }
+
+        return resolveTaskTarget(resolvedTask);
+      });
+      cache.set(task, finalizedTasks);
+      return finalizedTasks;
     } finally {
       resolving.delete(task);
     }
   };
 
-  return targets.map(resolveTask);
+  return resolveTarget(targets);
 }
 
 function toError(error: unknown): Error {
@@ -234,12 +267,8 @@ function createBuildLogger(verbose: boolean): BuildLogger {
   };
 }
 
-function normalizeTargets(targets: Task | readonly Task[]): readonly Task[] {
-  return Array.isArray(targets) ? targets : [targets as Task];
-}
-
-export async function reckon(targets: Task | readonly Task[], options: BuildOptions = {}): Promise<BuildSummary> {
-  const normalizedTargets = resolveConfiguredTargets(normalizeTargets(targets), options);
+export async function reckon(targets: BuildTarget, options: BuildOptions = {}): Promise<BuildSummary> {
+  const normalizedTargets = resolveConfiguredTargets(targets, options);
   if (normalizedTargets.length === 0) {
     return { executed: [], skipped: [], failed: [] };
   }

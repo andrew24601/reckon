@@ -41,9 +41,12 @@ export interface TaskContext {
   runCommand(command: string, args: readonly string[], options?: CommandRunOptions): Promise<void>;
 }
 
+export type BuildTarget = Task | readonly BuildTarget[];
+
 export interface TaskResolutionContext {
   readonly options: BuildOptions;
   resolveTask(task: Task): Task;
+  resolveTarget(target: BuildTarget): readonly Task[];
 }
 
 export interface Task {
@@ -53,7 +56,7 @@ export interface Task {
   readonly fileDependencies: string[];
   readonly taskDependencies: readonly Task[];
   readonly fingerprint: string;
-  resolve?(context: TaskResolutionContext): Task;
+  resolve?(context: TaskResolutionContext): BuildTarget;
   execute(context: TaskContext): Promise<TaskExecutionResult | void>;
 }
 
@@ -62,8 +65,6 @@ export interface BuildSummary {
   readonly skipped: string[];
   readonly failed: string[];
 }
-
-export type BuildTarget = Task | readonly Task[];
 
 export interface FileSignature {
   readonly exists: boolean;

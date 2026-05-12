@@ -3,7 +3,7 @@ import { readdirSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 
 import { createFingerprint, normalizeBuildPath } from "../core/signatures.js";
-import type { BuildOptions, ClangTaskDefaults, ExecutableTaskDefaults, Task } from "../core/types.js";
+import type { BuildOptions, BuildTarget, ClangTaskDefaults, ExecutableTaskDefaults, Task } from "../core/types.js";
 
 export interface ClangOptions {
   readonly output?: string;
@@ -112,6 +112,18 @@ function collectSourceFiles(rootPath: string, extensions: ReadonlySet<string>): 
   }
 
   return files;
+}
+
+function isTask(target: BuildTarget): target is Task {
+  return !Array.isArray(target);
+}
+
+function flattenTaskTargets(target: BuildTarget): readonly Task[] {
+  if (isTask(target)) {
+    return [target];
+  }
+
+  return target.flatMap(flattenTaskTargets);
 }
 
 function isCxxLikeSource(filePath: string): boolean {
@@ -278,35 +290,60 @@ export function clang(source: string, options: ClangOptions = {}): Task {
   return createConfiguredClangTask(source, options);
 }
 
-export function clangTree(root: string, options: ClangTreeOptions = {}): readonly Task[] {
+export function clangTree(root: string, options: ClangTreeOptions = {}): Task {
   const normalizedRoot = normalizeBuildPath(root);
-  const discoveryCwd = path.resolve(options.cwd ?? process.cwd());
-  const resolvedRoot = path.resolve(discoveryCwd, normalizedRoot);
-  const normalizedSourceRoot = normalizeBuildPath(path.relative(discoveryCwd, resolvedRoot) || ".");
-  const extensions = new Set((options.extensions ?? DEFAULT_CLANG_TREE_EXTENSIONS).map((extension) => extension.toLowerCase()));
-  const sourceOptions: ClangOptions = {
+  const normalizedExtensions = (options.extensions ?? DEFAULT_CLANG_TREE_EXTENSIONS).map((extension) => extension.toLowerCase());
+  const fingerprint = createFingerprint({
+    kind: "clangTree",
+    root: normalizedRoot,
     outDir: options.outDir,
     compiler: options.compiler,
     flags: options.flags,
     includes: options.includes,
-    dependencies: options.dependencies,
     cwd: options.cwd,
-  };
+    extensions: normalizedExtensions,
+    dependencies: (options.dependencies ?? []).map((task) => task.id),
+  });
 
-  return collectSourceFiles(resolvedRoot, extensions)
-    .map((filePath) => normalizeBuildPath(path.relative(discoveryCwd, filePath)))
-    .sort((left, right) => left.localeCompare(right))
-    .map((source) => createConfiguredClangTask(source, sourceOptions, normalizedSourceRoot));
+  return {
+    id: `clangTree:${fingerprint}`,
+    label: `clangTree ${normalizedRoot}`,
+    outputs: [],
+    fileDependencies: [],
+    taskDependencies: [],
+    fingerprint,
+    resolve(context) {
+      const discoveryCwd = path.resolve(context.options.cwd ?? process.cwd());
+      const resolvedRoot = path.resolve(discoveryCwd, normalizedRoot);
+      const normalizedSourceRoot = normalizeBuildPath(path.relative(discoveryCwd, resolvedRoot) || ".");
+      const sourceOptions: ClangOptions = {
+        outDir: options.outDir,
+        compiler: options.compiler,
+        flags: options.flags,
+        includes: options.includes,
+        dependencies: options.dependencies,
+        cwd: options.cwd,
+      };
+
+      return collectSourceFiles(resolvedRoot, new Set(normalizedExtensions))
+        .map((filePath) => normalizeBuildPath(path.relative(discoveryCwd, filePath)))
+        .sort((left, right) => left.localeCompare(right))
+        .map((source) => createConfiguredClangTask(source, sourceOptions, normalizedSourceRoot));
+    },
+    async execute() {
+      throw new Error(`Unresolved clangTree task cannot execute for ${normalizedRoot}`);
+    },
+  };
 }
 
-export function executable(output: string, objects: readonly Task[], options: ExecutableOptions = {}): Task {
+export function executable(output: string, objects: BuildTarget, options: ExecutableOptions = {}): Task {
   const normalizedOutput = normalizeBuildPath(output);
-  const task = createExecutableTask(normalizedOutput, objects, options);
+  const task = createExecutableTask(normalizedOutput, flattenTaskTargets(objects), options);
 
   return {
     ...task,
     resolve(context) {
-      return createExecutableTask(normalizedOutput, objects.map(context.resolveTask), options, context.options);
+      return createExecutableTask(normalizedOutput, context.resolveTarget(objects), options, context.options);
     },
   };
 }
