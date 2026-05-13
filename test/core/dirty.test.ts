@@ -19,6 +19,10 @@ async function withTempDir(run: (cwd: string) => Promise<void>): Promise<void> {
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createProducer(version: string): Task {
   return {
     id: "producer",
@@ -181,9 +185,18 @@ test("reckon verbose mode logs build progress", async (t) => {
     assert.deepEqual(summary.executed, [target.label]);
     assert.equal(errors.length, 0);
     assert(messages.some((message) => message.includes(`[reckon] start build: 1 task, concurrency ${Math.max(1, cpus().length)}`)));
-    assert(messages.some((message) => message.includes(`[reckon] run: ${target.label}`)));
-    assert(messages.some((message) => message.includes(`[reckon] 1/1 executed: ${target.label}`)));
-    assert(messages.some((message) => message.includes("[reckon] complete: 1 executed, 0 skipped, 0 failed")));
+    assert(messages.some((message) => new RegExp(`^\\[reckon\\] ✅ ${escapeRegExp(target.label)} \\([^)]+\\)$`).test(message)));
+    assert(messages.some((message) => /^\[reckon\] complete: 1 executed, 0 skipped in [^)]+$/.test(message)));
+    assert(!messages.some((message) => message.includes(`[reckon] run: ${target.label}`)));
+
+    messages.length = 0;
+
+    const skippedSummary = await reckon(target, { cwd, verbose: true });
+
+    assert.deepEqual(skippedSummary.skipped, [target.label]);
+    assert(messages.some((message) => /^\[reckon\] complete: 0 executed, 1 skipped in [^)]+$/.test(message)));
+    assert(!messages.some((message) => message.includes("skipped:")));
+    assert(!messages.some((message) => message.includes(`✅ ${target.label}`)));
   });
 });
 

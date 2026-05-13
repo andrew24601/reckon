@@ -267,6 +267,28 @@ function createBuildLogger(verbose: boolean): BuildLogger {
   };
 }
 
+function formatTaskLogLabel(label: string): string {
+  if (label.startsWith("executable ")) {
+    return `link ${label.slice("executable ".length)}`;
+  }
+
+  if (label.startsWith("macOS app ")) {
+    return `package macOS app ${label.slice("macOS app ".length)}`;
+  }
+
+  return label;
+}
+
+function formatDuration(milliseconds: number): string {
+  const roundedMilliseconds = Math.max(1, Math.round(milliseconds));
+
+  if (roundedMilliseconds < 1000) {
+    return `${roundedMilliseconds}ms`;
+  }
+
+  return `${(milliseconds / 1000).toFixed(1)}s`;
+}
+
 export async function reckon(targets: BuildTarget, options: BuildOptions = {}): Promise<BuildSummary> {
   const normalizedTargets = resolveConfiguredTargets(targets, options);
   if (normalizedTargets.length === 0) {
@@ -286,15 +308,21 @@ export async function reckon(targets: BuildTarget, options: BuildOptions = {}): 
   const readyQueue = graph.order.filter((node) => node.dependencies.length === 0);
   let activeCount = 0;
   let failureDetected = false;
-  let completedCount = 0;
   let finalized = false;
+  const buildStartedAt = performance.now();
 
   logger.info(`start build: ${graph.order.length} task${graph.order.length === 1 ? "" : "s"}, concurrency ${concurrency}`);
 
   return await new Promise<BuildSummary>((resolve, reject) => {
-    const markTaskCompleted = (status: TaskRunResult["status"], label: string, detail?: string) => {
-      completedCount += 1;
-      logger.info(`${completedCount}/${graph.order.length} ${status}: ${label}`);
+    const markTaskCompleted = (status: TaskRunResult["status"], label: string, detail?: string, durationMs?: number) => {
+      if (status === "executed") {
+        logger.info(`✅ ${formatTaskLogLabel(label)} (${formatDuration(durationMs ?? 0)})`);
+      }
+
+      if (status === "failed") {
+        logger.error(`❌ ${formatTaskLogLabel(label)}${durationMs === undefined ? "" : ` (${formatDuration(durationMs)})`}`);
+      }
+
       if (detail) {
         logger.error(`${label}: ${detail}`);
       }
@@ -331,7 +359,9 @@ export async function reckon(targets: BuildTarget, options: BuildOptions = {}): 
       try {
         await saveBuildState(stateDirectory, state);
         const summary = summarizeResults(graph.order, results);
-        logger.info(`complete: ${summary.executed.length} executed, ${summary.skipped.length} skipped, ${summary.failed.length} failed`);
+        const duration = formatDuration(performance.now() - buildStartedAt);
+        const failureSummary = summary.failed.length > 0 ? `, ${summary.failed.length} failed` : "";
+        logger.info(`complete: ${summary.executed.length} executed, ${summary.skipped.length} skipped${failureSummary} in ${duration}`);
         if (summary.failed.length > 0) {
           reject(new BuildFailureError(summary, collectFailureDetails(graph.order, results)));
           return;
@@ -355,6 +385,7 @@ export async function reckon(targets: BuildTarget, options: BuildOptions = {}): 
     };
 
     const runNode = async (node: BuildNode) => {
+      let taskStartedAt: number | undefined;
       const dependencyResults = node.dependencies.map((dependency) => results.get(dependency.task.id) ?? { status: "failed" as const, error: new Error(`Missing dependency result for ${dependency.task.label}`) });
       if (dependencyResults.some((result) => result.status === "failed")) {
         failureDetected = true;
@@ -376,17 +407,22 @@ export async function reckon(targets: BuildTarget, options: BuildOptions = {}): 
           return;
         }
 
-        logger.info(`run: ${node.task.label}`);
+        taskStartedAt = performance.now();
         const result = await node.task.execute(context);
         const taskState = await createPersistedTaskState(node.task, cwd, result);
         state = setTaskState(state, node.task.id, taskState);
         results.set(node.task.id, { status: "executed" });
-        markTaskCompleted("executed", node.task.label);
+        markTaskCompleted("executed", node.task.label, undefined, performance.now() - taskStartedAt);
       } catch (error) {
         failureDetected = true;
         const taskError = toError(error);
         results.set(node.task.id, { status: "failed", error: taskError, failureKind: "task" });
-        markTaskCompleted("failed", node.task.label, summarizeErrorMessage(taskError));
+        markTaskCompleted(
+          "failed",
+          node.task.label,
+          summarizeErrorMessage(taskError),
+          taskStartedAt === undefined ? undefined : performance.now() - taskStartedAt,
+        );
       }
     };
 
