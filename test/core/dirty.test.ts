@@ -87,6 +87,24 @@ function createDependentOutputTask(dependency: Task): Task {
   };
 }
 
+async function createWebCommandFixture(cwd: string): Promise<void> {
+  await mkdir(path.join(cwd, "web/src"), { recursive: true });
+  await writeFile(path.join(cwd, "web/build.mjs"), "export default {};\n", "utf8");
+  await writeFile(path.join(cwd, "web/package.json"), "{\"type\":\"module\"}\n", "utf8");
+}
+
+function createWebBundleTask(fileDependencies: readonly string[]): Task {
+  return createCommandTask(
+    process.execPath,
+    ["-e", "await import('node:fs/promises').then(async ({ mkdir, writeFile }) => { await mkdir('dist', { recursive: true }); await writeFile('dist/app.bundle.js', `${Date.now()}\\n`, 'utf8'); });"],
+    {
+      cwd: "web",
+      outputs: ["web/dist/app.bundle.js"],
+      fileDependencies,
+    },
+  );
+}
+
 test("copy task reruns when its input changes or output is deleted", async () => {
   await withTempDir(async (cwd) => {
     await writeFile(path.join(cwd, "source.txt"), "first\n", "utf8");
@@ -139,6 +157,66 @@ test("downstream tasks rerun when an upstream task fingerprint changes", async (
 
     assert.deepEqual(third.executed, [producerV2.label, consumerV2.label]);
     assert.equal(await readFile(path.join(cwd, "dist/result.txt"), "utf8"), "HELLO:V2\n");
+  });
+});
+
+test("command file dependency globs rerun when matched files change, appear, or disappear", async () => {
+  await withTempDir(async (cwd) => {
+    await createWebCommandFixture(cwd);
+    await writeFile(path.join(cwd, "web/src/app.js"), "console.log('app v1');\n", "utf8");
+
+    const target = createWebBundleTask(["web/build.mjs", "web/package.json", "web/src/*.js"]);
+
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.deepEqual((await reckon(target, { cwd })).skipped, [target.label]);
+
+    await delay(20);
+    await writeFile(path.join(cwd, "web/src/app.js"), "console.log('app v2');\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+
+    await delay(20);
+    await writeFile(path.join(cwd, "web/src/widget.js"), "console.log('widget');\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+
+    await delay(20);
+    await unlink(path.join(cwd, "web/src/widget.js"));
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+  });
+});
+
+test("command file dependency globstar matches top-level and nested files", async () => {
+  await withTempDir(async (cwd) => {
+    await createWebCommandFixture(cwd);
+    await writeFile(path.join(cwd, "web/src/app.js"), "console.log('app');\n", "utf8");
+
+    const target = createWebBundleTask(["web/src/**/*.js"]);
+
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.deepEqual((await reckon(target, { cwd })).skipped, [target.label]);
+
+    await delay(20);
+    await mkdir(path.join(cwd, "web/src/components"), { recursive: true });
+    await writeFile(path.join(cwd, "web/src/components/button.js"), "console.log('button v1');\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+
+    await delay(20);
+    await writeFile(path.join(cwd, "web/src/components/button.js"), "console.log('button v2');\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+  });
+});
+
+test("command file dependency globs rebuild when an initially unmatched pattern gains a file", async () => {
+  await withTempDir(async (cwd) => {
+    await createWebCommandFixture(cwd);
+
+    const target = createWebBundleTask(["web/src/*.js"]);
+
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.deepEqual((await reckon(target, { cwd })).skipped, [target.label]);
+
+    await delay(20);
+    await writeFile(path.join(cwd, "web/src/app.js"), "console.log('app');\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
   });
 });
 

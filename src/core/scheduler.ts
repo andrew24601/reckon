@@ -179,7 +179,7 @@ async function shouldExecuteTask(
     return true;
   }
 
-  const fileDependencySignatures = await capturePathSignatures(cwd, node.task.fileDependencies);
+  const fileDependencySignatures = await capturePathSignatures(cwd, node.task.fileDependencies, { expandGlobs: true });
   if (!signatureMapsEqual(previous.fileDependencies, fileDependencySignatures)) {
     return true;
   }
@@ -195,7 +195,7 @@ async function createPersistedTaskState(
   result: TaskExecutionResult | void,
 ): Promise<PersistedTaskState> {
   const outputSignatures = await capturePathSignatures(cwd, task.outputs);
-  const fileDependencySignatures = await capturePathSignatures(cwd, task.fileDependencies);
+  const fileDependencySignatures = await capturePathSignatures(cwd, task.fileDependencies, { expandGlobs: true });
   const discoveredDependencies = result?.discoveredDependencies ?? [];
   const discoveredSignatures = await capturePathSignatures(cwd, discoveredDependencies);
 

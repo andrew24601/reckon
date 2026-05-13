@@ -51,6 +51,24 @@ npx tsx build.ts
 - Provides C-family helpers: `clang`, `clangTree`, and `executable`
 - Provides unsigned macOS app bundle helpers: `macOSApp`, `appBundle`, and `pngIcon`
 
+## Command Tasks
+
+Use `command(...)` for external tools that are not covered by a built-in helper. Declare outputs explicitly, and list any source files or config files in `fileDependencies`:
+
+```js
+import { command, reckon } from "reckon";
+
+const webBundle = command("npm", ["run", "build"], {
+  cwd: "web",
+  outputs: ["web/dist/app.bundle.js"],
+  fileDependencies: ["web/build.mjs", "web/package.json", "web/src/*.js"],
+});
+
+await reckon(webBundle);
+```
+
+`fileDependencies` supports `*`, `?`, and `**` wildcards. Reckon expands those patterns to concrete files when checking whether the task is dirty, so matching file additions, removals, and edits trigger a rebuild. Outputs remain explicit paths.
+
 ## C Builds
 
 ```js
