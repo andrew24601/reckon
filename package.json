@@ -1,6 +1,6 @@
 {
   "name": "@andrew24601/reckon",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Incremental Node.js build graph runner",
   "license": "MIT",
   "type": "module",
