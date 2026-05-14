@@ -48,8 +48,52 @@ npx tsx build.ts
 - Skips tasks when fingerprints, declared inputs, discovered dependencies, and outputs are unchanged
 - Schedules independent tasks in parallel
 - Provides filesystem helpers: `mkdir`, `writeFile`, `copy`, and `command`
+- Provides code-based task helpers: `task` and `jsonToFile`
 - Provides C-family helpers: `clang`, `clangTree`, and `executable`
 - Provides unsigned macOS app bundle helpers: `macOSApp`, `appBundle`, and `pngIcon`
+
+## Code Tasks
+
+Use `task(...)` when a build step is easier to express in JavaScript than as an external command. Reckon still tracks declared inputs, outputs, dependencies, and the task callback fingerprint:
+
+```js
+import { readFile, writeFile } from "node:fs/promises";
+import { reckon, task } from "reckon";
+
+const generated = task("generate version", {
+  outputs: ["build/gensrc/version.h"],
+  fileDependencies: ["package.json"],
+  fingerprint: { format: 1 },
+  async execute(context) {
+    const pkg = JSON.parse(await readFile(context.resolvePath("package.json"), "utf8"));
+    await writeFile(
+      context.resolvePath("build/gensrc/version.h"),
+      `#define VERSION "${pkg.version}"\n`,
+      "utf8",
+    );
+  },
+});
+
+await reckon(generated);
+```
+
+For common JSON-to-generated-file steps, use `jsonToFile(...)`:
+
+```js
+import { jsonToFile, reckon } from "reckon";
+
+const versionFile = jsonToFile({
+  input: "package.json",
+  output: "build/gensrc/version.h",
+  async transform(pkg) {
+    return `#define VERSION "${pkg.version}"\n`;
+  },
+});
+
+await reckon(versionFile);
+```
+
+`jsonToFile(...)` reads and parses the JSON input, passes the parsed value to `transform`, creates the output directory, and writes the returned `string` or `Uint8Array`. If a callback closes over values that should invalidate the task, include them in `fingerprint`.
 
 ## Command Tasks
 

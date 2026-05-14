@@ -5,7 +5,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
-import { BuildFailureError, command as createCommandTask, copy, reckon, writeFile as createWriteFileTask } from "../../src/index.js";
+import { BuildFailureError, command as createCommandTask, copy, jsonToFile, reckon, task as createCodeTask, writeFile as createWriteFileTask } from "../../src/index.js";
 import { createFingerprint } from "../../src/core/signatures.js";
 import type { Task } from "../../src/core/types.js";
 
@@ -135,6 +135,128 @@ test("task fingerprint changes invalidate prior task state", async () => {
     assert.deepEqual(first.executed, ["write dist/output.txt"]);
     assert.deepEqual(second.executed, ["write dist/output.txt"]);
     assert.equal(await readFile(path.join(cwd, "dist/output.txt"), "utf8"), "beta\n");
+  });
+});
+
+test("code task executes and skips when unchanged", async () => {
+  await withTempDir(async (cwd) => {
+    const target = createCodeTask("generate output", {
+      outputs: ["dist/output.txt"],
+      async execute(context) {
+        await writeFile(context.resolvePath("dist/output.txt"), "hello\n", "utf8");
+      },
+    });
+
+    const first = await reckon(target, { cwd });
+    const second = await reckon(target, { cwd });
+
+    assert.deepEqual(first.executed, [target.label]);
+    assert.deepEqual(second.skipped, [target.label]);
+    assert.equal(await readFile(path.join(cwd, "dist/output.txt"), "utf8"), "hello\n");
+  });
+});
+
+test("code task reruns when a declared file dependency changes", async () => {
+  await withTempDir(async (cwd) => {
+    await writeFile(path.join(cwd, "source.txt"), "first\n", "utf8");
+
+    const target = createCodeTask("uppercase source", {
+      outputs: ["dist/output.txt"],
+      fileDependencies: ["source.txt"],
+      async execute(context) {
+        const source = await readFile(context.resolvePath("source.txt"), "utf8");
+        await writeFile(context.resolvePath("dist/output.txt"), source.toUpperCase(), "utf8");
+      },
+    });
+
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.deepEqual((await reckon(target, { cwd })).skipped, [target.label]);
+
+    await delay(20);
+    await writeFile(path.join(cwd, "source.txt"), "second\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.equal(await readFile(path.join(cwd, "dist/output.txt"), "utf8"), "SECOND\n");
+  });
+});
+
+test("code task reruns when callback body or explicit fingerprint changes", async () => {
+  await withTempDir(async (cwd) => {
+    const first = createCodeTask("generate version", {
+      outputs: ["dist/version.txt"],
+      async execute(context) {
+        await writeFile(context.resolvePath("dist/version.txt"), "alpha\n", "utf8");
+      },
+    });
+    const second = createCodeTask("generate version", {
+      outputs: ["dist/version.txt"],
+      async execute(context) {
+        await writeFile(context.resolvePath("dist/version.txt"), "beta\n", "utf8");
+      },
+    });
+
+    assert.deepEqual((await reckon(first, { cwd })).executed, [first.label]);
+    assert.deepEqual((await reckon(second, { cwd })).executed, [second.label]);
+    assert.equal(await readFile(path.join(cwd, "dist/version.txt"), "utf8"), "beta\n");
+
+    const createConfiguredTask = (version: string): Task => createCodeTask("generate configured version", {
+      outputs: ["dist/configured-version.txt"],
+      fingerprint: { version },
+      async execute(context) {
+        await writeFile(context.resolvePath("dist/configured-version.txt"), `${version}\n`, "utf8");
+      },
+    });
+
+    assert.deepEqual((await reckon(createConfiguredTask("1.0.0"), { cwd })).executed, ["generate configured version"]);
+    assert.deepEqual((await reckon(createConfiguredTask("1.0.0"), { cwd })).skipped, ["generate configured version"]);
+    assert.deepEqual((await reckon(createConfiguredTask("1.0.1"), { cwd })).executed, ["generate configured version"]);
+    assert.equal(await readFile(path.join(cwd, "dist/configured-version.txt"), "utf8"), "1.0.1\n");
+  });
+});
+
+test("jsonToFile writes generated content from parsed JSON and tracks input changes", async () => {
+  await withTempDir(async (cwd) => {
+    await writeFile(path.join(cwd, "package.json"), "{\"version\":\"1.0.0\"}\n", "utf8");
+
+    const target = jsonToFile({
+      input: "package.json",
+      output: "build/gensrc/version.h",
+      async transform(pkg: { version: string }) {
+        return `#define VERSION "${pkg.version}"\n`;
+      },
+    });
+
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.deepEqual((await reckon(target, { cwd })).skipped, [target.label]);
+    assert.equal(await readFile(path.join(cwd, "build/gensrc/version.h"), "utf8"), "#define VERSION \"1.0.0\"\n");
+
+    await delay(20);
+    await writeFile(path.join(cwd, "package.json"), "{\"version\":\"1.0.1\"}\n", "utf8");
+    assert.deepEqual((await reckon(target, { cwd })).executed, [target.label]);
+    assert.equal(await readFile(path.join(cwd, "build/gensrc/version.h"), "utf8"), "#define VERSION \"1.0.1\"\n");
+  });
+});
+
+test("jsonToFile transform failures surface through BuildFailureError", async () => {
+  await withTempDir(async (cwd) => {
+    await writeFile(path.join(cwd, "package.json"), "{\"version\":\"1.0.0\"}\n", "utf8");
+
+    const target = jsonToFile({
+      input: "package.json",
+      output: "build/gensrc/version.h",
+      transform() {
+        throw new Error("missing version");
+      },
+    });
+
+    await assert.rejects(
+      () => reckon(target, { cwd }),
+      (error: unknown) => {
+        assert(error instanceof BuildFailureError);
+        assert.deepEqual(error.summary.failed, [target.label]);
+        assert.match(error.message, /json package\.json -> build\/gensrc\/version\.h: missing version/);
+        return true;
+      },
+    );
   });
 });
 

@@ -35,6 +35,7 @@ await reckon(app, {
 - Persistent incremental rebuilds using task fingerprints plus file stat signatures
 - Parallel scheduling of independent tasks
 - Built-in filesystem helpers: `mkdir`, `writeFile`, `copy`, and `command`
+- Code-based task helpers: `task` for arbitrary JavaScript/TypeScript build steps and `jsonToFile` for JSON-driven generated files
 - C-family helpers: `clang`, `clangTree`, and `executable`
 - macOS packaging helpers: `macOSApp` and `appBundle` for unsigned `.app` bundles
 - `pngIcon` for generating `.icns` files from PNG input on macOS
@@ -51,6 +52,8 @@ Not implemented in the current codebase:
 
 Reckon records each task's fingerprint, declared inputs, declared outputs, and any discovered dependencies. On later runs, it rebuilds only when a task definition changes, an output is missing or changed, a declared file dependency changes, or a discovered dependency changes.
 
+Prefer code-based tasks over `command(...)` when the work can be expressed clearly in JavaScript or TypeScript without invoking an external tool. Use `task(...)` for low-level in-process build steps and `jsonToFile(...)` for generated files derived from JSON inputs. If a task callback closes over configuration values, include those values in the task's explicit fingerprint so incremental rebuilds stay correct.
+
 For C-family compilation, `clang(...)` emits dependency files and uses them to track header dependencies automatically. `clangTree(...)` recursively discovers common C-family source extensions such as `.c`, `.cc`, `.cpp`, `.cxx`, `.m`, and `.mm`. Object outputs default to `build/obj`, and sources under `src/` infer a sibling `build/obj` directory while preserving nested subpaths.
 
 `executable(...)` links object tasks into a binary and automatically switches to `clang++` when upstream objects come from C++ or Objective-C++ sources, unless the compiler is overridden explicitly.
@@ -65,6 +68,10 @@ The implemented macOS support is limited to building unsigned application bundle
 - icons must already be `.icns`, or can be produced by `pngIcon(...)`
 
 `pngIcon(...)` currently accepts PNG input only and relies on the macOS `sips` and `iconutil` tools to generate the final `.icns` file.
+
+## Documentation Maintenance
+
+When adding, removing, or materially changing public features, helper APIs, task behavior, package shape, architecture, or implemented scope, update both `README.md` and `AGENTS.md` in the same change. Keep examples aligned with the library-first API and avoid documenting capabilities that are not implemented.
 
 ## Verification
 
