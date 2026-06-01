@@ -7,7 +7,7 @@ The package is published as ESM. For most projects, use a plain `build.mjs` file
 ## Install
 
 ```bash
-npm install --save-dev reckon
+npm install --save-dev @andrew24601/reckon
 ```
 
 ## Quick Start
